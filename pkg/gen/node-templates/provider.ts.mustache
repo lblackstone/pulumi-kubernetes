@@ -29,9 +29,10 @@ export namespace yaml {
 
     export function parse(
         config: ConfigGroupOpts, opts?: pulumi.CustomResourceOptions
-    ): {[key: string]: pulumi.CustomResource} {
-        let resources: {[key: string]: pulumi.CustomResource} = {};
+    ): pulumi.Output<{[key: string]: pulumi.CustomResource}> {
 
+        // Parse all YAML config files.
+        let configFileResources: pulumi.Output<{[key: string]: pulumi.CustomResource}>[] = [];
         if (config.files !== undefined) {
             let files: string[] = [];
             if (typeof config.files === 'string') {
@@ -42,43 +43,48 @@ export namespace yaml {
                 }
             }
 
-            for (const file of files) {
-                const cf = new ConfigFile(file,
-                    {file: file, transformations: config.transformations}, opts);
-                if (cf != null) {
-                    resources = {...resources, ...cf.resources}
+            configFileResources = files.map(file =>
+                new ConfigFile(file, {file: file, transformations: config.transformations}, opts)
+                    .resources);
+        }
+
+        return pulumi.output(configFileResources)
+            .apply(configFileResources => {
+                let resources: {[key: string]: pulumi.CustomResource} = {};
+
+                for (const cf of configFileResources) {
+                    resources = {...resources, ...cf}
                 }
-            }
-        }
 
-        if (config.yaml !== undefined) {
-            let yamlTexts: string[] = [];
-            if (typeof config.yaml === 'string') {
-                yamlTexts.push(config.yaml);
-            } else {
-                yamlTexts.push(...config.yaml);
-            }
+                if (config.yaml !== undefined) {
+                    let yamlTexts: string[] = [];
+                    if (typeof config.yaml === 'string') {
+                        yamlTexts.push(config.yaml);
+                    } else {
+                        yamlTexts.push(...config.yaml);
+                    }
 
-            for (const text of yamlTexts) {
-                const objs = jsyaml.safeLoadAll(text);
-                const docResources = parseYamlDocument(
-                    {objs: objs, transformations: config.transformations}, opts);
-                resources = {...resources, ...docResources};
-            }
-        }
 
-        if (config.objs !== undefined) {
-            const objs= Array.isArray(config.objs) ? config.objs: [config.objs];
-                const docResources = parseYamlDocument(
-                    {objs: objs, transformations: config.transformations}, opts);
-                resources = {...resources, ...docResources};
-        }
+                    for (const text of yamlTexts) {
+                        const objs = jsyaml.safeLoadAll(text);
+                        const docResources = parseYamlDocument(
+                            {objs: objs, transformations: config.transformations}, opts);
+                        resources = {...resources, ...docResources};
+                    }
+                }
 
-        return resources;
+                if (config.objs !== undefined) {
+                    const objs= Array.isArray(config.objs) ? config.objs: [config.objs];
+                        const docResources = parseYamlDocument(
+                            {objs: objs, transformations: config.transformations}, opts);
+                        resources = {...resources, ...docResources};
+                }
+
+                return resources;
+            });
     }
-
     export abstract class CollectionComponentResource extends pulumi.ComponentResource {
-        resources: { [key: string]: pulumi.CustomResource };
+        resources: pulumi.Output<{ [key: string]: pulumi.CustomResource }>;
 
         constructor(
             resourceType: string, name: string, config: any, opts?: pulumi.ComponentResourceOptions,
@@ -95,12 +101,12 @@ export namespace yaml {
         {{#Groups}}
         {{#Versions}}
         {{#Kinds}}
-        public getResource(groupVersionKind: "{{RawAPIVersion}}/{{Kind}}", name: string): {{Group}}.{{Version}}.{{Kind}};
-        public getResource(groupVersionKind: "{{RawAPIVersion}}/{{Kind}}", namespace: string, name: string): {{Group}}.{{Version}}.{{Kind}};
+        public getResource(groupVersionKind: "{{RawAPIVersion}}/{{Kind}}", name: string): pulumi.Output<{{Group}}.{{Version}}.{{Kind}}>;
+        public getResource(groupVersionKind: "{{RawAPIVersion}}/{{Kind}}", namespace: string, name: string): pulumi.Output<{{Group}}.{{Version}}.{{Kind}}>;
         {{/Kinds}}
         {{/Versions}}
         {{/Groups}}
-        public getResource(groupVersionKind: string, namespaceOrName: string, name?: string): pulumi.CustomResource {
+        public getResource(groupVersionKind: string, namespaceOrName: string, name?: string): pulumi.Output<pulumi.CustomResource> {
             return this.getResourceImpl(groupVersionKind, namespaceOrName, name);
         }
 
@@ -110,20 +116,20 @@ export namespace yaml {
          * For example:
          *     getCustomResource("monitoring.coreos.com/v1/ServiceMonitor", "kube-prometheus-exporter-kubernetes")
          */
-        public getCustomResource<T extends pulumi.CustomResource>(groupVersionKind: string, namespace: string): T;
-        public getCustomResource<T extends pulumi.CustomResource>(groupVersionKind: string, namespace: string, name: string): T;
-        public getCustomResource(groupVersionKind: string, namespaceOrName: string, name?: string): pulumi.CustomResource {
+        public getCustomResource<T extends pulumi.CustomResource>(groupVersionKind: string, namespace: string): pulumi.Output<T>;
+        public getCustomResource<T extends pulumi.CustomResource>(groupVersionKind: string, namespace: string, name: string): pulumi.Output<T>;
+        public getCustomResource(groupVersionKind: string, namespaceOrName: string, name?: string): pulumi.Output<pulumi.CustomResource> {
             return this.getResourceImpl(groupVersionKind, namespaceOrName, name);
         }
 
-        private getResourceImpl(groupVersionKind: string, namespaceOrName: string, name?: string): pulumi.CustomResource {
+        private getResourceImpl(groupVersionKind: string, namespaceOrName: string, name?: string): pulumi.Output<pulumi.CustomResource> {
            // `id` will either be `${name}` or `${namespace}/${name}`.
             let id = namespaceOrName;
             if (name !== undefined) {
                 id = `${namespaceOrName}/${name}`;
             }
 
-            return this.resources[`${groupVersionKind}::${id}`];
+            return this.resources.apply(r => r[`${groupVersionKind}::${id}`]);
         }
     }
 
@@ -159,10 +165,10 @@ export namespace yaml {
             super("kubernetes:yaml:ConfigFile", name, config, opts);
             const text = fs.readFileSync(config && config.file || name).toString();
             const objs = jsyaml.safeLoadAll(text);
-            this.resources = parseYamlDocument({
+            this.resources = pulumi.output(parseYamlDocument({
                 objs: objs,
                 transformations: config && config.transformations || []
-            }, {parent: this});
+            }, {parent: this}));
         }
     }
 
